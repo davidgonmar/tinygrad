@@ -250,17 +250,53 @@ class TestBitCast(unittest.TestCase):
     # needs np.int16 so it is interpreted as the int16 value and not as an int32 value and then regularly casted to int16
     itemsize = binary_value.itemsize
     inttype = "int" + str(itemsize*8)
-    return [dt(binary_value.view(inttype) >> i & (2**chunk_size-1)) for i in range(0, 32, chunk_size)]
+    dtinttype = "int" + str(np.array(1).astype(dt).itemsize * 8)
+    return [np.array(binary_value.view(inttype) >> i & (2**chunk_size-1), dtype=dtinttype).view(dt) for i in range(0, itemsize*8, chunk_size)]
+  
+  _bitcast_down_pairs = [
+    (dtypes.int32, dtypes.int16),
+    (dtypes.float32, dtypes.int16),
+    (dtypes.int32, dtypes.uint16),
+    (dtypes.float32, dtypes.uint16),
+    (dtypes.int64, dtypes.int32),
+    (dtypes.int64, dtypes.uint32),
+    (dtypes.float64, dtypes.int32),
+    (dtypes.float64, dtypes.uint32),
+    (dtypes.float64, dtypes.int16),
+    (dtypes.float64, dtypes.uint16),
+    (dtypes.float64, dtypes.float32),
+  ]
 
-  @given(strat.integers(min_value=1, max_value=20), strat.sampled_from([(dtypes.int32, dtypes.int16), (dtypes.float32, dtypes.int16), (dtypes.int32, dtypes.uint16), (dtypes.float32, dtypes.uint16), (dtypes.int64, dtypes.int32), (dtypes.int64, dtypes.uint32)]))
-  def test_shape_change_bitcast_int32_int16(self, shape, _dtypes):
+  @given(
+    strat.sampled_from([(1, 2), (2, 1), (10, 20), (1, 20), (20, 1), (1, 1, 1), (1, 1, 20), (1, 20, 1), (20, 1, 1), (20, 20, 20)]),
+    strat.sampled_from(_bitcast_down_pairs)
+  )
+  def test_shape_change_bitcast_correct(self, shape, _dtypes):
       npdtype_from, npdtype_to = _to_np_dtype(_dtypes[0]), _to_np_dtype(_dtypes[1])
       value = np.random.randn(1).astype(npdtype_from)[0]
       assert type(value) == npdtype_from
       # extract first and second half of values -> expected
-      extr = self.chop_binary(value, 16, npdtype_to)
-      _test_bitcast(Tensor([value]*shape, dtype=_dtypes[0]), _dtypes[1], extr * shape)
+      extr = self.chop_binary(value, _dtypes[1].itemsize * 8, npdtype_to)
+      expected = np.array(extr * shape[-1], dtype=npdtype_to).reshape([1] * (len(shape) - 1) + [len(extr) * shape[-1]])
+      expected = np.broadcast_to(expected,(*shape[:-1],expected.shape[-1]))
+      totest = np.array([value]*np.prod(shape), dtype=npdtype_from).reshape(shape)
+      totest = np.ascontiguousarray(totest)
+      totest = Tensor(totest, dtype=_dtypes[0]).bitcast(_dtypes[1])
+      np.testing.assert_allclose(totest.numpy(), expected)
 
+  @given(
+    strat.sampled_from(_bitcast_down_pairs)
+  )
+  def test_non_contiguous_bitcast(self, _dtypes):
+    dtype_from, dtype_to = _dtypes
+    a = Tensor([1,2,3,4,5,6,7,8], dtype=dtype_from).reshape(2,2,2).T
+    with self.assertRaises(RuntimeError):
+      a.bitcast(dtype_to)
+
+  def test_bitcast_scalar(self):
+    with self.assertRaises(RuntimeError):
+      Tensor(1).bitcast(dtypes.int16)
+      
   def test_bitcast_float_to_int32(self):
     a = Tensor([1.,2,3])
     b = a.bitcast(dtypes.int32)

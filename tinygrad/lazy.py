@@ -98,10 +98,14 @@ class LazyBuffer:
       return create_lazybuffer(self.device, self.st, dtype, LoadOps.CONST, dtypes.as_const(self.base.arg, dtype))
     new_shape = self.shape
     if bitcast and self.dtype.itemsize != dtype.itemsize:
+      # cannot shape-changing bitcast on scalars
+      if len(new_shape) == 0: raise RuntimeError("cannot shape-changing bitcast on scalars")
       #if not self.device.startswith("DISK"): raise RuntimeError("shape changing bitcast only supported on DISK right now")
       if not all_int(new_shape): raise RuntimeError("shape changing bitcast with symbolic shape isn't supported yet")
       # https://pytorch.org/docs/stable/generated/torch.Tensor.view.html
-      if not (new_shape[-1]*self.dtype.itemsize) % dtype.itemsize == 0: raise RuntimeError("unsupported size in bitcast")
+      if not (new_shape[-1]*self.dtype.itemsize) % dtype.itemsize == 0: raise RuntimeError("unsupported size in bitcast, itemsize from %d to %d" % (self.dtype.itemsize, dtype.itemsize))
+      # must be contiguous TODO --(maybe not?)
+      if not self.st.contiguous: raise RuntimeError("shape changing bitcast only supported on contiguous tensors")
       new_shape = new_shape[:-1] + ((new_shape[-1]*self.dtype.itemsize) // dtype.itemsize,)
     elif getenv("CAST_BEFORE_VIEW", 1) and dtype.itemsize <= self.dtype.itemsize and self != self.base:
       # TODO: applying this makes gpt2 slower
